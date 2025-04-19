@@ -1,0 +1,75 @@
+# Main account configuration - where funds will return after liquidation
+main_account:
+  address: "__"
+
+# API credentials for the main account
+api:                      
+  key: "__"
+  secret: "__"
+
+symbol: "SOL_USDC_PERP"        # точное имя рынка
+initial_deposit: "10"        # USDC на цикл
+check_interval: 60             # сек
+action_delay:                  # случайная задержка перед каждым запросом
+  min: 10
+  max: 20
+
+# config.yaml
+pair_start_delay_max: 40  # максимальная задержка между запуском пар в секундах
+
+# Trading pairs configuration
+pairs:
+  - short_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+    long_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+  - short_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+    long_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+  - short_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+    long_account:
+      name: "Short3"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+  - short_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+    long_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+  - short_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+    long_account:
+      name: "__"
+      address: "__"
+      api_key: "__"
+      api_secret: "__"
+
+
+initial_deposit: "10"   # сколько USDC закидывать
+leverage: 50            # плечо, которое выставит бот
