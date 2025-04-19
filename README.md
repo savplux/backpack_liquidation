@@ -10,7 +10,7 @@
 
 Конфигурируемые задержки: случайные паузы между запросами для обхода защиты.
 
-Ретрай и устойчивость: логика повторов при ошибках, экспоненциальный бэкофф.
+Ретрай и устойчивость: логика повторов при ошибках.
 
 Подробный лог: цветное консольное логирование и файловые логи.
 
@@ -18,8 +18,7 @@
 
 Клонируйте репозиторий:
 
-git clone https://github.com/ваш_логин/backpack-liquidation-bot.git
-cd backpack-liquidation-bot
+git clone https://github.com/savplux/backpack_liquidation
 
 Создайте и активируйте виртуальное окружение:
 
@@ -32,36 +31,6 @@ venv\\Scripts\\activate  # Windows
 pip install -r requirements.txt
 
 🔧 Конфигурация (config.yaml)
-
-Пример config.yaml:
-
-main_account:
-  address: "ВАШ_MAIN_ADDRESS"
-
-api:
-  key: "ВАШ_MAIN_API_KEY"
-  secret: "ВАШ_MAIN_API_SECRET"
-
-symbol: "SOL_USDC_PERP"
-initial_deposit: "10"
-check_interval: 60
-action_delay:
-  min: 10
-  max: 20
-pair_start_delay_max: 40
-leverage: 50
-
-pairs:
-  - short_account:
-      name: "ShortBot1"
-      address: "ADDRESS_SHORT_1"
-      api_key: "SHORT1_KEY"
-      api_secret: "SHORT1_SECRET"
-    long_account:
-      name: "LongBot1"
-      address: "ADDRESS_LONG_1"
-      api_key: "LONG1_KEY"
-      api_secret: "LONG1_SECRET"
 
 main_account.address: адрес вашего основного кошелька для сбора средств.
 
@@ -78,6 +47,19 @@ action_delay.min/max: диапазон задержек между запрос�
 pair_start_delay_max: максимальная начальная задержка для потоков.
 
 leverage: кредитное плечо (например, 50).
+
+pairs: данные от суб-аккаунтов.
+
+  - short_account:
+      name: "ShortBot1"
+      address: "ADDRESS_SHORT_1" 
+      api_key: "SHORT1_KEY"
+      api_secret: "SHORT1_SECRET"
+    long_account:
+      name: "LongBot1"
+      address: "ADDRESS_LONG_1"
+      api_key: "LONG1_KEY"
+      api_secret: "LONG1_SECRET"
 
 📦 Запуск
 
