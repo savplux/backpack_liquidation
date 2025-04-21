@@ -162,74 +162,27 @@ class BackpackTrader:
             self._market_cache[symbol] = fallback
             return fallback
             
-    def execute_full_margin_order(self, symbol: str, side: str, leverage: float = 1.0) -> bool:
+    def execute_full_margin_order(self, symbol: str, side: str, leverage: float = 1.0, retry_attempts: int = 5, min_delay: float = 1.0, max_delay: float = 15.0) -> bool:
         """Place a market order using all available margin with better error handling."""
-        # 1. Сначала пробуем метод с quoteQuantity (до 4 знаков после запятой)
-        try:
-            margin = self.get_available_margin() * leverage
-            if margin <= 0:
-                logging.error(f"BackpackTrader | No margin available")
-                return False
-                
-            # Округляем до 4 знаков после запятой, чтобы избежать ошибки "decimal too long"
-            quote_qty = round(margin, 4)
-            quote_qty_str = f"{quote_qty:.4f}"
-            
-            logging.info(f"BackpackTrader | Attempting order with quoteQuantity={quote_qty_str}")
-            result = self.auth.execute_order(
-                orderType="Market",
-                side=side,
-                symbol=symbol,
-                quoteQuantity=quote_qty_str,
-                reduceOnly=False,
-                autoBorrow=True,
-                autoBorrowRepay=True,
-                autoLend=True,
-                autoLendRedeem=True,
-                selfTradePrevention="RejectTaker"
-            )
-            logging.info(f"BackpackTrader | Placed {side} order for {symbol} with quoteQuantity={quote_qty_str}")
-            return True
-        except Exception as e:
-            logging.warning(f"BackpackTrader | quoteQuantity order error: {e}")
-            
-            # 2. Если первый метод не сработал, пробуем вычислить quantity
+        # Всего retry_attempts попыток
+        for attempt in range(retry_attempts):
             try:
-                info = self.get_market_info(symbol)
-                price = float(info.get("lastPrice", "0"))
-                step = float(info.get("baseIncrement", "0.01"))
-                
-                if price <= 0:
-                    price = self.get_ticker_price(symbol)
-                    
-                if price <= 0:
-                    logging.error(f"BackpackTrader | Could not get valid price for {symbol}")
-                    return False
-                    
+                # 1. Сначала пробуем метод с quoteQuantity (до 4 знаков после запятой)
                 margin = self.get_available_margin() * leverage
                 if margin <= 0:
                     logging.error(f"BackpackTrader | No margin available")
                     return False
                     
-                # Вычисляем количество с учетом шага
-                raw_qty = margin / price
-                steps = math.floor(raw_qty / step)
-                qty = steps * step
+                # Округляем до 4 знаков после запятой, чтобы избежать ошибки "decimal too long"
+                quote_qty = round(margin, 4)
+                quote_qty_str = f"{quote_qty:.4f}"
                 
-                # Минимальное значение
-                if qty < 0.01:
-                    qty = 0.01
-                    
-                # Округляем до правильного количества знаков
-                decimals = len(str(step).split('.')[-1]) if '.' in str(step) else 0
-                qty_str = f"{qty:.{decimals}f}"
-                
-                logging.info(f"BackpackTrader | Attempting order with quantity={qty_str}, price={price}")
+                logging.info(f"BackpackTrader | Попытка {attempt+1}/{retry_attempts}: ордер на {quote_qty_str} USDC ({side})")
                 result = self.auth.execute_order(
                     orderType="Market",
                     side=side,
                     symbol=symbol,
-                    quantity=qty_str,
+                    quoteQuantity=quote_qty_str,
                     reduceOnly=False,
                     autoBorrow=True,
                     autoBorrowRepay=True,
@@ -237,15 +190,49 @@ class BackpackTrader:
                     autoLendRedeem=True,
                     selfTradePrevention="RejectTaker"
                 )
-                logging.info(f"BackpackTrader | Placed {side} order for {symbol} with quantity={qty_str}")
+                logging.info(f"BackpackTrader | Placed {side} order for {symbol} with quoteQuantity={quote_qty_str}")
                 return True
-            except Exception as e2:
-                logging.error(f"BackpackTrader | quantity order error: {e2}")
+            except Exception as e:
+                logging.warning(f"BackpackTrader | quoteQuantity order error (попытка {attempt+1}/{retry_attempts}): {e}")
                 
-                # 3. Последняя попытка - использовать минимальное количество
+                # 2. Если первый метод не сработал, пробуем вычислить quantity
                 try:
-                    qty_str = "0.01"
-                    logging.info(f"BackpackTrader | Last attempt with minimum quantity={qty_str}")
+                    info = self.get_market_info(symbol)
+                    price = float(info.get("lastPrice", "0"))
+                    step = float(info.get("baseIncrement", "0.01"))
+                    
+                    if price <= 0:
+                        price = self.get_ticker_price(symbol)
+                        
+                    if price <= 0:
+                        logging.error(f"BackpackTrader | Could not get valid price for {symbol}")
+                        
+                        # Если не последняя попытка, ждем и пробуем снова
+                        if attempt < retry_attempts - 1:
+                            delay = random.uniform(min_delay, max_delay)
+                            logging.info(f"BackpackTrader | Ожидание {delay:.1f}с перед следующей попыткой")
+                            time.sleep(delay)
+                        continue  # Переходим к следующей попытке
+                        
+                    margin = self.get_available_margin() * leverage
+                    if margin <= 0:
+                        logging.error(f"BackpackTrader | No margin available")
+                        return False
+                        
+                    # Вычисляем количество с учетом шага
+                    raw_qty = margin / price
+                    steps = math.floor(raw_qty / step)
+                    qty = steps * step
+                    
+                    # Минимальное значение
+                    if qty < 0.01:
+                        qty = 0.01
+                        
+                    # Округляем до правильного количества знаков
+                    decimals = len(str(step).split('.')[-1]) if '.' in str(step) else 0
+                    qty_str = f"{qty:.{decimals}f}"
+                    
+                    logging.info(f"BackpackTrader | Attempting order with quantity={qty_str}, price={price}")
                     result = self.auth.execute_order(
                         orderType="Market",
                         side=side,
@@ -258,11 +245,18 @@ class BackpackTrader:
                         autoLendRedeem=True,
                         selfTradePrevention="RejectTaker"
                     )
-                    logging.info(f"BackpackTrader | Placed minimum {side} order for {symbol}")
+                    logging.info(f"BackpackTrader | Placed {side} order for {symbol} with quantity={qty_str}")
                     return True
-                except Exception as e3:
-                    logging.error(f"BackpackTrader | Minimum order error: {e3}")
-                    return False
+                except Exception as e2:
+                    logging.error(f"BackpackTrader | quantity order error (попытка {attempt+1}/{retry_attempts}): {e2}")
+                
+                    # Если это не последняя глобальная попытка, делаем паузу согласно конфигу
+                    if attempt < retry_attempts - 1:
+                        delay = random.uniform(min_delay, max_delay)
+                        logging.info(f"BackpackTrader | Ожидание {delay:.1f}с перед следующей попыткой")
+                        time.sleep(delay)
+            
+        return False  # Если все попытки не удались
                     
     def place_long_with_full_margin(self, symbol: str, leverage: float = 1.0) -> bool:
         return self.execute_full_margin_order(symbol, "Bid", leverage)
@@ -284,7 +278,7 @@ class SubAccount:
         self.trader = BackpackTrader(cfg["api_key"], cfg["api_secret"])
         self.min_delay = 1.0
         self.max_delay = 1.0
-        self.retry_attempts = 3  # Maximum number of attempts to open a position
+        self.retry_attempts = 8  # Maximum number of attempts to open a position
 
     def random_delay(self):
         """Execute a random delay between min_delay and max_delay seconds."""
@@ -297,19 +291,33 @@ class SubAccount:
         for attempt in range(self.retry_attempts):
             logging.info(f"{self.name} | Opening position attempt {attempt+1}/{self.retry_attempts}")
             if self.is_long:
-                success = self.trader.place_long_with_full_margin(symbol, self.leverage)
+                success = self.trader.execute_full_margin_order(
+                    symbol, 
+                    "Bid", 
+                    self.leverage, 
+                    retry_attempts=self.retry_attempts,
+                    min_delay=self.min_delay,
+                    max_delay=self.max_delay
+                )
             else:
-                success = self.trader.place_short_with_full_margin(symbol, self.leverage)
-                
+                success = self.trader.execute_full_margin_order(
+                    symbol, 
+                    "Ask", 
+                    self.leverage,
+                    retry_attempts=self.retry_attempts,
+                    min_delay=self.min_delay,
+                    max_delay=self.max_delay
+                )
+                    
             if success:
                 logging.info(f"{self.name} | Position opened successfully")
                 return True
-                
+                    
             if attempt < self.retry_attempts - 1:
-                delay = min(2 ** attempt, 5)  # Exponential backoff delay
-                logging.info(f"{self.name} | Retrying after {delay}s...")
+                delay = random.uniform(self.min_delay, self.max_delay)  # Используем задержку из конфига
+                logging.info(f"{self.name} | Retrying after {delay:.1f}s...")
                 time.sleep(delay)
-                
+                    
         logging.error(f"{self.name} | Failed to open position after {self.retry_attempts} attempts")
         return False
 
