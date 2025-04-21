@@ -437,18 +437,18 @@ class SubAccount:
             logging.error(f"{self.name} | Не удалось закрыть позицию: {e}")
             return False
 
-    def sweep(self, main_address: str) -> bool:
-        """Withdraw all available funds to the main account."""
+    def sweep(self, main_address: str, max_attempts: int = 8) -> bool:
+        """Withdraw all available funds to the main account with improved retries."""
         balance = self.trader.get_available_margin()
-        if balance <= 0.1:  # Minimum threshold for withdrawal
-            logging.info(f"{self.name} | Insufficient funds to sweep: {balance} USDC")
-            return True  # Consider successful if nothing to withdraw
+        if balance <= 0.1:  # Минимальный порог для вывода
+            logging.info(f"{self.name} | Недостаточно средств для вывода: {balance} USDC")
+            return True  # Считаем успешным, если нечего выводить
             
-        # Round to 6 decimal places
+        # Округляем до 6 десятичных знаков
         qty = round(balance, 6)
         qty_str = f"{qty:.6f}"
         
-        for attempt in range(3):  # Multiple withdrawal attempts
+        for attempt in range(max_attempts):  # Увеличено до 8 попыток
             try:
                 result = self.trader.auth.request_withdrawal(
                     address=main_address,
@@ -456,16 +456,18 @@ class SubAccount:
                     quantity=qty_str,
                     symbol=USDC
                 )
-                logging.info(f"{self.name} | Swept {qty_str} USDC to main")
+                logging.info(f"{self.name} | Выведено {qty_str} USDC на основной счет")
                 return True
             except Exception as e:
-                logging.warning(f"{self.name} | Error sweeping funds (attempt {attempt+1}): {e}")
+                logging.warning(f"{self.name} | Ошибка вывода средств (попытка {attempt+1}/{max_attempts}): {e}")
+                
                 if "Insufficient collateral" in str(e):
-                    logging.info(f"{self.name} | Funds may be locked in position, trying smaller amount")
-                    # Try withdrawing a smaller amount
+                    logging.info(f"{self.name} | Средства могут быть заблокированы в позиции, пробуем меньшую сумму")
+                    # Пробуем вывести меньшую сумму
                     try:
-                        qty *= 0.5  # Half the amount
-                        if qty < 0.1:  # If too small, stop
+                        qty *= 0.5  # Уменьшаем сумму вдвое
+                        if qty < 0.1:  # Если слишком мало, прекращаем
+                            logging.warning(f"{self.name} | Оставшаяся сумма слишком мала для вывода: {qty} USDC")
                             return False
                         qty_str = f"{qty:.6f}"
                         result = self.trader.auth.request_withdrawal(
@@ -474,15 +476,31 @@ class SubAccount:
                             quantity=qty_str,
                             symbol=USDC
                         )
-                        logging.info(f"{self.name} | Swept reduced amount {qty_str} USDC to main")
+                        logging.info(f"{self.name} | Выведена уменьшенная сумма {qty_str} USDC на основной счет")
                         return True
                     except Exception as e2:
-                        logging.error(f"{self.name} | Failed to sweep reduced amount: {e2}")
-                        
-                if attempt < 2:
-                    time.sleep(1)
+                        logging.error(f"{self.name} | Не удалось вывести уменьшенную сумму: {e2}")
+                
+                # Если это не последняя попытка, делаем паузу
+                if attempt < max_attempts - 1:
+                    # Используем экспоненциальную задержку с добавлением случайности
+                    base_delay = min(2 ** attempt, 30)  # Экспоненциальное увеличение, но не более 30 сек
+                    delay = random.uniform(base_delay, base_delay * 1.5)  # Случайность ±50%
+                    logging.info(f"{self.name} | Ожидание {delay:.1f}с перед следующей попыткой вывода")
+                    time.sleep(delay)
                     
-        logging.error(f"{self.name} | Failed to sweep funds after multiple attempts")
+                    # Проверяем баланс заново перед следующей попыткой
+                    try:
+                        new_balance = self.trader.get_available_margin()
+                        if new_balance != balance:
+                            logging.info(f"{self.name} | Баланс изменился: {balance} -> {new_balance} USDC")
+                            balance = new_balance
+                            qty = round(balance, 6)
+                            qty_str = f"{qty:.6f}"
+                    except Exception as e3:
+                        logging.warning(f"{self.name} | Ошибка обновления баланса: {e3}")
+                        
+        logging.error(f"{self.name} | Не удалось вывести средства после {max_attempts} попыток")
         return False
 
 
@@ -524,35 +542,50 @@ def worker_pair(short_cfg: Dict, long_cfg: Dict, cfg: Dict, main_address: str, d
             # 1. Депозит на оба суб-аккаунта с задержками между депозитами
             logging.info(f"Starting new cycle with {deposit_amt} USDC deposits")
             
+            # Функция для выполнения депозита с повторными попытками
+            def deposit_with_retries(account_address, account_name, max_attempts=5):
+                for deposit_attempt in range(max_attempts):
+                    try:
+                        parent.request_withdrawal(
+                            address=account_address,
+                            blockchain=BLOCKCHAIN,
+                            quantity=f"{deposit_amt:.6f}",
+                            symbol=USDC
+                        )
+                        logging.info(f"{account_name} | Deposited {deposit_amt:.6f} USDC")
+                        return True
+                    except Exception as e:
+                        logging.error(f"{account_name} | Deposit error (attempt {deposit_attempt+1}/{max_attempts}): {e}")
+                        
+                        # Если это не последняя попытка, делаем паузу и пробуем снова
+                        if deposit_attempt < max_attempts - 1:
+                            delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
+                            logging.info(f"{account_name} | Waiting {delay:.1f}s before next deposit attempt")
+                            time.sleep(delay)
+                
+                logging.error(f"{account_name} | Failed to deposit after {max_attempts} attempts")
+                return False
+
             # Депозит на short аккаунт
-            try:
-                parent.request_withdrawal(
-                    address=short_acc.address,
-                    blockchain=BLOCKCHAIN,
-                    quantity=f"{deposit_amt:.6f}",
-                    symbol=USDC
-                )
-                logging.info(f"{short_acc.name} | Deposited {deposit_amt:.6f} USDC")
-            except Exception as e:
-                logging.error(f"{short_acc.name} | Deposit error: {e}")
-            
+            short_deposit_success = deposit_with_retries(short_acc.address, short_acc.name)
+
             # Задержка между депозитами согласно конфигу
-            delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
-            logging.info(f"Delaying {delay:.1f}s between deposits")
-            time.sleep(delay)
-            
+            if short_deposit_success:
+                delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
+                logging.info(f"Delaying {delay:.1f}s between deposits")
+                time.sleep(delay)
+            else:
+                logging.warning(f"Skipping delay as short account deposit failed")
+
             # Депозит на long аккаунт
-            try:
-                parent.request_withdrawal(
-                    address=long_acc.address,
-                    blockchain=BLOCKCHAIN,
-                    quantity=f"{deposit_amt:.6f}",
-                    symbol=USDC
-                )
-                logging.info(f"{long_acc.name} | Deposited {deposit_amt:.6f} USDC")
-            except Exception as e:
-                logging.error(f"{long_acc.name} | Deposit error: {e}")
-            
+            long_deposit_success = deposit_with_retries(long_acc.address, long_acc.name)
+
+            # Проверяем, что хотя бы один депозит прошел успешно
+            if not (short_deposit_success or long_deposit_success):
+                logging.error(f"Both deposits failed, restarting cycle")
+                time.sleep(5)  # Небольшая задержка перед новой попыткой цикла
+                continue  # Переходим к следующей итерации цикла
+
             # 2. Случайная задержка перед открытием позиций (из конфига)
             delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
             logging.info(f"Delaying {delay:.1f}s before opening positions")
@@ -630,29 +663,38 @@ def worker_pair(short_cfg: Dict, long_cfg: Dict, cfg: Dict, main_address: str, d
                         liquidation_detected = True
                         break
             
-            # 5. Закрытие выживших позиций
-            if short_position_opened and short_acc.has_position(symbol):
-                logging.info(f"Closing surviving short position")
-                short_acc.close_position(symbol)
-                
-            if long_position_opened and long_acc.has_position(symbol):
-                logging.info(f"Closing surviving long position")
-                long_acc.close_position(symbol)
-            
-            # Задержка перед выводом средств
-            delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
-            logging.info(f"Delaying {delay:.1f}s before sweeping funds")
-            time.sleep(delay)
-            
-            # 6. Свип средств на основной счет
-            logging.info(f"Sweeping funds back to main account")
-            short_acc.sweep(main_address)
-            long_acc.sweep(main_address)
-            
-            # Задержка перед следующим циклом
-            delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
-            logging.info(f"Delaying {delay:.1f}s before starting next cycle")
-            time.sleep(delay)
+                # 5. Закрытие выживших позиций
+                if short_position_opened and short_acc.has_position(symbol):
+                    logging.info(f"Closing surviving short position")
+                    short_acc.close_position(symbol)
+                    
+                if long_position_opened and long_acc.has_position(symbol):
+                    logging.info(f"Closing surviving long position")
+                    long_acc.close_position(symbol)
+
+                # Задержка после закрытия позиций, перед выводом средств
+                delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
+                logging.info(f"Delaying {delay:.1f}s after closing positions, before sweeping funds")
+                time.sleep(delay)
+
+                # 6. Свип средств на основной счет
+                logging.info(f"Sweeping funds back to main account")
+
+                # Свип средств с short аккаунта
+                short_sweep_success = short_acc.sweep(main_address)
+
+                # Задержка между выводами согласно конфигу
+                delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
+                logging.info(f"Delaying {delay:.1f}s between sweeps")
+                time.sleep(delay)
+
+                # Свип средств с long аккаунта
+                long_sweep_success = long_acc.sweep(main_address)
+
+                # Задержка перед следующим циклом
+                delay = random.uniform(short_acc.min_delay, short_acc.max_delay)
+                logging.info(f"Delaying {delay:.1f}s before starting next cycle")
+                time.sleep(delay)
             
         except Exception as e:
             logging.error(f"Critical error in worker cycle: {e}")
